@@ -81,13 +81,13 @@ public class PayWalletServiceImpl implements PayWalletService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public PayWalletTransactionDO orderPay(Long userId, Integer userType, String outTradeNo, Integer price) {
+    public PayWalletTransactionDO orderPay(Long walletId, String outTradeNo, Integer price) {
         // 1. 判断支付交易拓展单是否存
         PayOrderExtensionDO orderExtension = orderService.getOrderExtensionByNo(outTradeNo);
         if (orderExtension == null) {
             throw exception(PAY_ORDER_EXTENSION_NOT_FOUND);
         }
-        PayWalletDO wallet = getOrCreateWallet(userId, userType);
+        PayWalletDO wallet = walletMapper.selectById(walletId);
         // 2. 扣减余额
         return reduceWalletBalance(wallet.getId(), orderExtension.getOrderId(), PAYMENT, price);
     }
@@ -187,7 +187,7 @@ public class PayWalletServiceImpl implements PayWalletService {
 
         // 2. 加锁，更新钱包余额（目的：避免钱包流水的并发更新时，余额变化不连贯）
         return lockRedisDAO.lock(walletId, UPDATE_TIMEOUT_MILLIS, () -> {
-            // 2. 更新钱包金额
+            // 3. 更新钱包金额
             switch (bizType) {
                 case PAYMENT_REFUND: { // 退款更新
                     walletMapper.updateWhenConsumptionRefund(payWallet.getId(), price);
@@ -198,15 +198,15 @@ public class PayWalletServiceImpl implements PayWalletService {
                     break;
                 }
                 case UPDATE_BALANCE: // 更新余额
-                    walletMapper.updateWhenRecharge(payWallet.getId(), price);
+                case TRANSFER: // 分佣提现
+                    walletMapper.updateWhenAdd(payWallet.getId(), price);
                     break;
                 default: {
-                    // TODO 其它类型待实现
-                    throw new UnsupportedOperationException("待实现");
+                    throw new UnsupportedOperationException("待实现：" + bizType);
                 }
             }
 
-            // 3. 生成钱包流水
+            // 4. 生成钱包流水
             WalletTransactionCreateReqBO transactionCreateReqBO = new WalletTransactionCreateReqBO()
                     .setWalletId(payWallet.getId()).setPrice(price).setBalance(payWallet.getBalance() + price)
                     .setBizId(bizId).setBizType(bizType.getType()).setTitle(bizType.getDescription());

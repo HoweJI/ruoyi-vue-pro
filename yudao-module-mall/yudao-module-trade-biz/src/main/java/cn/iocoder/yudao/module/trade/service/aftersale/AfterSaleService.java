@@ -1,12 +1,12 @@
 package cn.iocoder.yudao.module.trade.service.aftersale;
 
-import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.module.trade.controller.admin.aftersale.vo.AfterSaleDisagreeReqVO;
 import cn.iocoder.yudao.module.trade.controller.admin.aftersale.vo.AfterSalePageReqVO;
 import cn.iocoder.yudao.module.trade.controller.admin.aftersale.vo.AfterSaleRefuseReqVO;
 import cn.iocoder.yudao.module.trade.controller.app.aftersale.vo.AppAfterSaleCreateReqVO;
 import cn.iocoder.yudao.module.trade.controller.app.aftersale.vo.AppAfterSaleDeliveryReqVO;
+import cn.iocoder.yudao.module.trade.controller.app.aftersale.vo.AppAfterSalePageReqVO;
 import cn.iocoder.yudao.module.trade.dal.dataobject.aftersale.AfterSaleDO;
 
 /**
@@ -28,10 +28,10 @@ public interface AfterSaleService {
      * 【会员】获得售后订单分页
      *
      * @param userId    用户编号
-     * @param pageParam 分页参数
+     * @param pageReqVO 分页参数
      * @return 售后订单分页
      */
-    PageResult<AfterSaleDO> getAfterSalePage(Long userId, PageParam pageParam);
+    PageResult<AfterSaleDO> getAfterSalePage(Long userId, AppAfterSalePageReqVO pageReqVO);
 
     /**
      * 【会员】获得售后单
@@ -107,6 +107,15 @@ public interface AfterSaleService {
      * @param id     售后编号
      */
     void refundAfterSale(Long userId, String userIp, Long id);
+
+    /**
+     * 更新售后订单为已退款
+     *
+     * @param id          售后编号
+     * @param orderId     订单编号
+     * @param payRefundId 支付退款编号
+     */
+    void updateAfterSaleRefunded(Long id, Long orderId, Long payRefundId);
 
     /**
      * 【会员】取消售后

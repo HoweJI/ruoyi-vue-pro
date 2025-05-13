@@ -214,7 +214,7 @@ public class CrmContactServiceImpl implements CrmContactService {
         }
     }
 
-    @LogRecord(type = CRM_CONTACT_TYPE, subType = CRM_CONTACT_UPDATE_OWNER_USER_SUB_TYPE, bizNo = "{{#contact.id}",
+    @LogRecord(type = CRM_CONTACT_TYPE, subType = CRM_CONTACT_UPDATE_OWNER_USER_SUB_TYPE, bizNo = "{{#contact.id}}",
             success = CRM_CONTACT_UPDATE_OWNER_USER_SUCCESS)
     public void receiveContactLog(CrmContactDO contact, Long ownerUserId) {
         // 记录操作日志上下文
@@ -223,7 +223,7 @@ public class CrmContactServiceImpl implements CrmContactService {
     }
 
     @Override
-    @LogRecord(type = CRM_CONTACT_TYPE, subType = CRM_CONTACT_FOLLOW_UP_SUB_TYPE, bizNo = "{{#id}",
+    @LogRecord(type = CRM_CONTACT_TYPE, subType = CRM_CONTACT_FOLLOW_UP_SUB_TYPE, bizNo = "{{#id}}",
             success = CRM_CONTACT_FOLLOW_UP_SUCCESS)
     @CrmPermission(bizType = CrmBizTypeEnum.CRM_CONTACT, bizId = "#id", level = CrmPermissionLevelEnum.WRITE)
     public void updateContactFollowUp(Long id, LocalDateTime contactNextTime, String contactLastContent) {

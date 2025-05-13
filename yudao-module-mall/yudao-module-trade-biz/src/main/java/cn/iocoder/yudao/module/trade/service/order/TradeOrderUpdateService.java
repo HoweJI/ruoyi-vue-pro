@@ -129,16 +129,18 @@ public interface TradeOrderUpdateService {
     /**
      * 【管理员】核销订单
      *
+     * @param userId 管理员编号
      * @param id 订单编号
      */
-    void pickUpOrderByAdmin(Long id);
+    void pickUpOrderByAdmin(Long userId, Long id);
 
     /**
      * 【管理员】核销订单
      *
+     * @param userId 管理员编号
      * @param pickUpVerifyCode 自提核销码
      */
-    void pickUpOrderByAdmin(String pickUpVerifyCode);
+    void pickUpOrderByAdmin(Long userId, String pickUpVerifyCode);
 
     /**
      * 【管理员】根据自提核销码，查询订单
@@ -206,6 +208,14 @@ public interface TradeOrderUpdateService {
      * @param cancelType       取消类型
      */
     void cancelPaidOrder(Long userId, Long orderId, Integer cancelType);
+
+    /**
+     * 取消支付订单的退款回调
+     *
+     * @param id               订单编号
+     * @param payRefundId      支付退款编号
+     */
+    void updatePaidOrderRefunded(Long id, Long payRefundId);
 
     /**
      * 更新下单赠送的优惠券编号到订单

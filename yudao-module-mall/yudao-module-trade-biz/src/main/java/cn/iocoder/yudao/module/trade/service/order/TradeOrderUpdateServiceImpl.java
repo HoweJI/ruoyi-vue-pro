@@ -20,7 +20,9 @@ import cn.iocoder.yudao.module.pay.api.order.dto.PayOrderCreateReqDTO;
 import cn.iocoder.yudao.module.pay.api.order.dto.PayOrderRespDTO;
 import cn.iocoder.yudao.module.pay.api.refund.PayRefundApi;
 import cn.iocoder.yudao.module.pay.api.refund.dto.PayRefundCreateReqDTO;
+import cn.iocoder.yudao.module.pay.api.refund.dto.PayRefundRespDTO;
 import cn.iocoder.yudao.module.pay.enums.order.PayOrderStatusEnum;
+import cn.iocoder.yudao.module.pay.enums.refund.PayRefundStatusEnum;
 import cn.iocoder.yudao.module.product.api.comment.ProductCommentApi;
 import cn.iocoder.yudao.module.product.api.comment.dto.ProductCommentCreateReqDTO;
 import cn.iocoder.yudao.module.system.api.social.SocialClientApi;
@@ -36,6 +38,7 @@ import cn.iocoder.yudao.module.trade.controller.app.order.vo.item.AppTradeOrderI
 import cn.iocoder.yudao.module.trade.convert.order.TradeOrderConvert;
 import cn.iocoder.yudao.module.trade.dal.dataobject.cart.CartDO;
 import cn.iocoder.yudao.module.trade.dal.dataobject.delivery.DeliveryExpressDO;
+import cn.iocoder.yudao.module.trade.dal.dataobject.delivery.DeliveryPickUpStoreDO;
 import cn.iocoder.yudao.module.trade.dal.dataobject.order.TradeOrderDO;
 import cn.iocoder.yudao.module.trade.dal.dataobject.order.TradeOrderItemDO;
 import cn.iocoder.yudao.module.trade.dal.mysql.order.TradeOrderItemMapper;
@@ -48,6 +51,7 @@ import cn.iocoder.yudao.module.trade.framework.order.core.annotations.TradeOrder
 import cn.iocoder.yudao.module.trade.framework.order.core.utils.TradeOrderLogUtils;
 import cn.iocoder.yudao.module.trade.service.cart.CartService;
 import cn.iocoder.yudao.module.trade.service.delivery.DeliveryExpressService;
+import cn.iocoder.yudao.module.trade.service.delivery.DeliveryPickUpStoreService;
 import cn.iocoder.yudao.module.trade.service.message.TradeMessageService;
 import cn.iocoder.yudao.module.trade.service.message.bo.TradeOrderMessageWhenDeliveryOrderReqBO;
 import cn.iocoder.yudao.module.trade.service.order.handler.TradeOrderHandler;
@@ -104,6 +108,8 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
     private DeliveryExpressService deliveryExpressService;
     @Resource
     private TradeMessageService tradeMessageService;
+    @Resource
+    private DeliveryPickUpStoreService pickUpStoreService;
 
     @Resource
     private PayOrderApi payOrderApi;
@@ -276,7 +282,7 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
         TradeOrderDO order = validateOrderExists(id);
         // 1.2 校验订单已支付
         if (!TradeOrderStatusEnum.isUnpaid(order.getStatus()) || order.getPayStatus()) {
-            // 特殊：如果订单已支付，且支付单号相同，直接返回，说明重复回调
+            // 特殊：支付单号相同，直接返回，说明重复回调
             if (ObjectUtil.equals(order.getPayOrderId(), payOrderId)) {
                 log.warn("[updateOrderPaid][order({}) 已支付，且支付单号相同({})，直接返回]", order, payOrderId);
                 return;
@@ -325,7 +331,7 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
     /**
      * 校验支付订单的合法性
      *
-     * @param order 交易订单
+     * @param order      交易订单
      * @param payOrderId 支付订单编号
      * @return 支付订单
      */
@@ -389,7 +395,7 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
 
         // 3. 记录订单日志
         TradeOrderLogUtils.setOrderInfo(order.getId(), order.getStatus(), TradeOrderStatusEnum.DELIVERED.getStatus(),
-                MapUtil.<String, Object>builder().put("deliveryName", express != null ? express.getName() : "")
+                MapUtil.<String, Object>builder().put("expressName", express != null ? express.getName() : "")
                         .put("logisticsNo", express != null ? deliveryReqVO.getLogisticsNo() : "").build());
 
         // 4.1 发送站内信
@@ -397,6 +403,11 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
                 .setOrderId(order.getId()).setUserId(order.getUserId()).setMessage(null));
         // 4.2 发送订阅消息
         getSelf().sendDeliveryOrderMessage(order, deliveryReqVO);
+
+        // 5. 处理订单发货后逻辑
+        order.setLogisticsId(updateOrderObj.getLogisticsId()).setLogisticsNo(updateOrderObj.getLogisticsNo())
+                .setStatus(updateOrderObj.getStatus()).setDeliveryTime(updateOrderObj.getDeliveryTime());
+        tradeOrderHandlers.forEach(handler -> handler.afterDeliveryOrder(order));
     }
 
     @Async
@@ -495,15 +506,20 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
      * @param order 订单
      */
     private void receiveOrder0(TradeOrderDO order) {
-        // 更新 TradeOrderDO 状态为已完成
+        // 1. 更新 TradeOrderDO 状态为已完成
+        LocalDateTime receiveTime = LocalDateTime.now();
         int updateCount = tradeOrderMapper.updateByIdAndStatus(order.getId(), order.getStatus(),
-                new TradeOrderDO().setStatus(TradeOrderStatusEnum.COMPLETED.getStatus()).setReceiveTime(LocalDateTime.now()));
+                new TradeOrderDO().setStatus(TradeOrderStatusEnum.COMPLETED.getStatus()).setReceiveTime(receiveTime));
         if (updateCount == 0) {
             throw exception(ORDER_RECEIVE_FAIL_STATUS_NOT_DELIVERED);
         }
 
-        // 插入订单日志
+        // 2. 插入订单日志
         TradeOrderLogUtils.setOrderInfo(order.getId(), order.getStatus(), TradeOrderStatusEnum.COMPLETED.getStatus());
+
+        // 3. 执行 TradeOrderHandler 后置处理
+        order.setStatus(TradeOrderStatusEnum.COMPLETED.getStatus()).setReceiveTime(receiveTime);
+        tradeOrderHandlers.forEach(handler -> handler.afterReceiveOrder(order));
     }
 
     /**
@@ -541,6 +557,14 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
         if (ObjectUtil.notEqual(order.getStatus(), TradeOrderStatusEnum.UNPAID.getStatus())) {
             throw exception(ORDER_CANCEL_FAIL_STATUS_NOT_UNPAID);
         }
+        // 1.3 校验是否支持延迟（不允许取消）
+        if (TradeOrderStatusEnum.isUnpaid(order.getStatus())) {
+            PayOrderRespDTO payOrder = payOrderApi.getOrder(order.getPayOrderId());
+            if (payOrder != null && PayOrderStatusEnum.isSuccess(payOrder.getStatus())) {
+                log.warn("[cancelOrderByMember][order({}) 支付单已支付（支付回调延迟），不支持取消]", order.getId());
+                throw exception(ORDER_CANCEL_FAIL_STATUS_NOT_UNPAID);
+            }
+        }
 
         // 2. 取消订单
         cancelOrder0(order, TradeOrderCancelTypeEnum.MEMBER_CANCEL);
@@ -577,6 +601,15 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
     @Transactional(rollbackFor = Exception.class)
     @TradeOrderLog(operateType = TradeOrderOperateTypeEnum.SYSTEM_CANCEL)
     public void cancelOrderBySystem(TradeOrderDO order) {
+        // 校验是否支持延迟（不允许取消）
+        if (TradeOrderStatusEnum.isUnpaid(order.getStatus())) {
+            PayOrderRespDTO payOrder = payOrderApi.getOrder(order.getPayOrderId());
+            if (payOrder != null && PayOrderStatusEnum.isSuccess(payOrder.getStatus())) {
+                log.warn("[cancelOrderBySystem][order({}) 支付单已支付（支付回调延迟），不支持取消]", order.getId());
+                return;
+            }
+        }
+
         cancelOrder0(order, TradeOrderCancelTypeEnum.PAY_TIMEOUT);
     }
 
@@ -684,8 +717,9 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
         List<TradeOrderItemDO> updateItems = new ArrayList<>();
         for (int i = 0; i < orderOrderItems.size(); i++) {
             TradeOrderItemDO item = orderOrderItems.get(i);
-            updateItems.add(new TradeOrderItemDO().setId(item.getId()).setAdjustPrice(item.getAdjustPrice() + dividePrices.get(i))
-                    .setPayPrice((item.getPayPrice() - item.getAdjustPrice()) + dividePrices.get(i)));
+            updateItems.add(new TradeOrderItemDO().setId(item.getId())
+                    .setAdjustPrice(item.getAdjustPrice() + dividePrices.get(i))
+                    .setPayPrice(item.getPayPrice() + dividePrices.get(i)));
         }
         tradeOrderItemMapper.updateBatch(updateItems);
 
@@ -718,14 +752,14 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
 
     @Override
     @TradeOrderLog(operateType = TradeOrderOperateTypeEnum.ADMIN_PICK_UP_RECEIVE)
-    public void pickUpOrderByAdmin(Long id) {
-        getSelf().pickUpOrder(tradeOrderMapper.selectById(id));
+    public void pickUpOrderByAdmin(Long userId, Long id) {
+        getSelf().pickUpOrder(userId, tradeOrderMapper.selectById(id));
     }
 
     @Override
     @TradeOrderLog(operateType = TradeOrderOperateTypeEnum.ADMIN_PICK_UP_RECEIVE)
-    public void pickUpOrderByAdmin(String pickUpVerifyCode) {
-        getSelf().pickUpOrder(tradeOrderMapper.selectOneByPickUpVerifyCode(pickUpVerifyCode));
+    public void pickUpOrderByAdmin(Long userId, String pickUpVerifyCode) {
+        getSelf().pickUpOrder(userId, tradeOrderMapper.selectOneByPickUpVerifyCode(pickUpVerifyCode));
     }
 
     @Override
@@ -734,13 +768,19 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void pickUpOrder(TradeOrderDO order) {
+    public void pickUpOrder(Long userId, TradeOrderDO order) {
         if (order == null) {
             throw exception(ORDER_NOT_FOUND);
         }
         if (ObjUtil.notEqual(DeliveryTypeEnum.PICK_UP.getType(), order.getDeliveryType())) {
             throw exception(ORDER_RECEIVE_FAIL_DELIVERY_TYPE_NOT_PICK_UP);
         }
+        DeliveryPickUpStoreDO deliveryPickUpStore = pickUpStoreService.getDeliveryPickUpStore(order.getPickUpStoreId());
+        if (deliveryPickUpStore == null
+                || !CollUtil.contains(deliveryPickUpStore.getVerifyUserIds(), userId)) {
+            throw exception(ORDER_PICK_UP_FAIL_NOT_VERIFY_USER);
+        }
+
         receiveOrder0(order);
     }
 
@@ -884,12 +924,11 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
         if (order == null) {
             throw exception(ORDER_NOT_FOUND);
         }
-
         // 1.3 校验订单是否支付
         if (!order.getPayStatus()) {
             throw exception(ORDER_CANCEL_PAID_FAIL, "已支付");
         }
-        // 1.3 校验订单是否未退款
+        // 1.4 校验订单是否未退款
         if (ObjUtil.notEqual(TradeOrderRefundStatusEnum.NONE.getStatus(), order.getRefundStatus())) {
             throw exception(ORDER_CANCEL_PAID_FAIL, "未退款");
         }
@@ -901,8 +940,22 @@ public class TradeOrderUpdateServiceImpl implements TradeOrderUpdateService {
                 .setAppKey(tradeOrderProperties.getPayAppKey())  // 支付应用
                 .setUserIp(NetUtil.getLocalhostStr()) // 使用本机 IP，因为是服务器发起退款的
                 .setMerchantOrderId(String.valueOf(order.getId())) // 支付单号
-                .setMerchantRefundId(String.valueOf(order.getId()))
+                // 特殊：因为订单支持 AfterSale 单个售后退款，也支持整单退款，所以需要通过 order- 进行下区分
+                //      具体可见 AfterSaleController 的 updateAfterSaleRefunded 方法
+                .setMerchantRefundId("order-" + order.getId())
                 .setReason(TradeOrderCancelTypeEnum.COMBINATION_CLOSE.getName()).setPrice(order.getPayPrice())); // 价格信息
+    }
+
+    @Override
+    public void updatePaidOrderRefunded(Long id, Long payRefundId) {
+        PayRefundRespDTO payRefund = payRefundApi.getRefund(payRefundId);
+        if (payRefund == null) {
+            throw exception(ORDER_UPDATE_PAID_ORDER_REFUNDED_FAIL_REFUND_NOT_FOUND);
+        }
+        // 特殊：因为在 cancelPaidOrder 已经进行订单的取消，所以这里必须退款成功！！！
+        if (!PayRefundStatusEnum.isSuccess(payRefund.getStatus())) {
+            throw exception(ORDER_UPDATE_PAID_ORDER_REFUNDED_FAIL_REFUND_STATUS_NOT_SUCCESS);
+        }
     }
 
     @Override
