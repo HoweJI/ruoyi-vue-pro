@@ -42,6 +42,7 @@ public interface BaseMapperX<T> extends MPJBaseMapper<T> {
     default PageResult<T> selectPage(PageParam pageParam, Collection<SortingField> sortingFields, @Param("ew") Wrapper<T> queryWrapper) {
         // 特殊：不分页，直接查询全部
         if (PageParam.PAGE_SIZE_NONE.equals(pageParam.getPageSize())) {
+            MyBatisUtils.addOrder(queryWrapper, sortingFields);
             List<T> list = selectList(queryWrapper);
             return new PageResult<>(list, (long) list.size());
         }
@@ -213,6 +214,13 @@ public interface BaseMapperX<T> extends MPJBaseMapper<T> {
 
     default int delete(SFunction<T, ?> field, Object value) {
         return delete(new LambdaQueryWrapper<T>().eq(field, value));
+    }
+
+    default int deleteBatch(SFunction<T, ?> field, Collection<?> values) {
+        if (CollUtil.isEmpty(values)) {
+            return 0;
+        }
+        return delete(new LambdaQueryWrapper<T>().in(field, values));
     }
 
 }
